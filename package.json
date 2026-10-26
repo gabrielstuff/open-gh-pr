@@ -1,0 +1,56 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "open-gh-pr",
+  "title": "GitHub PR Search",
+  "description": "Jump to any pull request by typing #NUMBER. Connects to GitHub with device login.",
+  "icon": "icon.png",
+  "author": "gabrieldelattre",
+  "platforms": ["macOS"],
+  "categories": ["Developer Tools"],
+  "license": "MIT",
+  "preferences": [
+    {
+      "name": "clientId",
+      "title": "GitHub OAuth App Client ID",
+      "description": "Client ID of a GitHub OAuth App with Device Flow enabled",
+      "type": "textfield",
+      "required": true,
+      "placeholder": "Ov23li..."
+    },
+    {
+      "name": "repo",
+      "title": "Default Repository",
+      "description": "Repository searched when you type #NUMBER (owner/repo). Type owner/repo#NUMBER for others.",
+      "type": "textfield",
+      "required": true,
+      "placeholder": "owner/repo"
+    }
+  ],
+  "commands": [
+    {
+      "name": "search-pull-requests",
+      "title": "Search Pull Requests",
+      "description": "Type #NUMBER to open a pull request",
+      "mode": "view"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^2.9.0",
+    "@raycast/utils": "^2.3.3"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^2.2.0",
+    "@types/node": "22.13.10",
+    "@types/react": "19.0.10",
+    "eslint": "^9.22.0",
+    "prettier": "^3.5.3",
+    "typescript": "^5.8.2"
+  },
+  "scripts": {
+    "build": "ray build",
+    "dev": "ray develop",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint",
+    "publish": "npx @raycast/api@latest publish"
+  }
+}
