@@ -11,8 +11,8 @@ function parseNumberQuery(text: string) {
   return m ? { repo: m[1]?.toLowerCase(), digits: m[2], number: Number(m[2]) } : undefined;
 }
 
-function Search({ token, disconnect }: Session) {
-  const [text, setText] = useState("");
+function Search({ token, disconnect, initialText }: Session) {
+  const [text, setText] = useState(initialText);
   const query = parseNumberQuery(text);
   const onError = (error: Error) => {
     if (error instanceof AuthError) disconnect();
@@ -52,6 +52,7 @@ function Search({ token, disconnect }: Session) {
       isLoading={recent.isLoading || (!!query && remote.isLoading)}
       filtering={!query}
       throttle
+      searchText={text}
       onSearchTextChange={setText}
       searchBarPlaceholder="#NUMBER, repo#NUMBER, or search your PRs…"
     >

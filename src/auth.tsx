@@ -13,15 +13,22 @@ import { useLocalStorage } from "@raycast/utils";
 import { useEffect, useState } from "react";
 import { DeviceCode, pollForToken, requestDeviceCode } from "./github";
 
-export type Session = { token: string; disconnect: () => Promise<void> };
+export type Session = { token: string; disconnect: () => Promise<void>; initialText: string };
 
 // Wraps a command: shows the device login until a token exists.
 export function withGitHub(Command: (props: Session) => React.JSX.Element) {
-  return function Authenticated() {
+  // Text typed in Raycast root search ("Use 2322 with…") or the command argument.
+  return function Authenticated(props: { arguments?: { query?: string }; fallbackText?: string }) {
     const { value: token, setValue, removeValue, isLoading } = useLocalStorage<string>("github-token");
     if (isLoading) return <List isLoading />;
     if (!token) return <Connect onToken={setValue} />;
-    return <Command token={token} disconnect={removeValue} />;
+    return (
+      <Command
+        token={token}
+        disconnect={removeValue}
+        initialText={props.arguments?.query || props.fallbackText || ""}
+      />
+    );
   };
 }
 

@@ -27,7 +27,15 @@
       "name": "search-pull-requests",
       "title": "Search Pull Requests",
       "description": "Type #NUMBER to open a pull request from any of your repos",
-      "mode": "view"
+      "mode": "view",
+      "arguments": [
+        {
+          "name": "query",
+          "type": "text",
+          "placeholder": "#NUMBER",
+          "required": false
+        }
+      ]
     },
     {
       "name": "manage-repositories",
