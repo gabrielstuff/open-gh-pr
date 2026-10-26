@@ -1,98 +1,87 @@
-import {
-  Action,
-  ActionPanel,
-  Clipboard,
-  Color,
-  Detail,
-  getPreferenceValues,
-  Icon,
-  List,
-  open,
-  showToast,
-  Toast,
-  Keyboard,
-} from "@raycast/api";
-import { useCachedPromise, useLocalStorage } from "@raycast/utils";
-import { useEffect, useState } from "react";
-import {
-  AuthError,
-  clearCache,
-  DeviceCode,
-  getPull,
-  listRecentPulls,
-  pollForToken,
-  PullRequest,
-  requestDeviceCode,
-} from "./github";
+import { Action, ActionPanel, Color, Icon, List, Keyboard } from "@raycast/api";
+import { useCachedPromise } from "@raycast/utils";
+import { useState } from "react";
+import { Session, withGitHub } from "./auth";
+import { AuthError, findPullInRepos, listMyRecentPulls, PullRequest } from "./github";
+import { RepoPicker, useSearchedRepos } from "./repos";
 
-export default function Command() {
-  const { value: token, setValue, removeValue, isLoading } = useLocalStorage<string>("github-token");
-
-  if (isLoading) return <List isLoading />;
-  if (!token) return <Connect onToken={setValue} />;
-
-  const disconnect = async () => {
-    clearCache();
-    await removeValue();
-  };
-  return <Search token={token} onDisconnect={disconnect} />;
+// "#123", "123", "repo#123" or "owner/repo#123"
+function parseNumberQuery(text: string) {
+  const m = text.trim().match(/^(?:([\w.-]+(?:\/[\w.-]+)?))?#?(\d+)$/);
+  return m ? { repo: m[1]?.toLowerCase(), digits: m[2], number: Number(m[2]) } : undefined;
 }
 
-// "#123", "123" or "owner/repo#123"
-function parseNumberQuery(text: string, defaultRepo: string) {
-  const m = text.trim().match(/^(?:([\w.-]+\/[\w.-]+))?#?(\d+)$/);
-  return m ? { repo: m[1] ?? defaultRepo, digits: m[2] } : undefined;
-}
-
-function Search({ token, onDisconnect }: { token: string; onDisconnect: () => Promise<void> }) {
-  const { repo } = getPreferenceValues<Preferences>();
+function Search({ token, disconnect }: Session) {
   const [text, setText] = useState("");
-  const query = parseNumberQuery(text, repo);
-  const number = query ? Number(query.digits) : 0;
-
+  const query = parseNumberQuery(text);
   const onError = (error: Error) => {
-    if (error instanceof AuthError) onDisconnect();
+    if (error instanceof AuthError) disconnect();
   };
 
-  // One list request per open; cached data renders instantly, ETag makes revalidation free when nothing changed.
-  const recent = useCachedPromise(listRecentPulls, [token, repo], { keepPreviousData: true, onError });
+  // One request per open: PRs you're involved in, across every repo. Cached, so it renders instantly.
+  const recent = useCachedPromise(listMyRecentPulls, [token], { keepPreviousData: true, onError });
+  const { searched, repos } = useSearchedRepos(token);
 
-  const local =
-    query?.repo === repo ? (recent.data ?? []).filter((p) => String(p.number).startsWith(query.digits)) : [];
-  const exactLocal = local.find((p) => p.number === number);
+  const matchesRepo = (repo: string) => {
+    if (!query?.repo) return true;
+    const r = repo.toLowerCase();
+    return query.repo.includes("/") ? r === query.repo : r.endsWith(`/${query.repo}`);
+  };
+  const targetRepos = query?.repo ? (repos.data ?? searched).filter(matchesRepo) : searched;
 
-  // Only hit the API for a number we don't already have.
-  const single = useCachedPromise(getPull, [token, query?.repo ?? repo, number], {
-    execute: !!query && !exactLocal && !recent.isLoading,
+  // One request per typed number, for all target repos at once (GraphQL aliases).
+  const remote = useCachedPromise(findPullInRepos, [token, targetRepos, query?.number ?? 0], {
+    execute: !!query && targetRepos.length > 0,
+    keepPreviousData: false,
     onError,
   });
 
-  const exactRemote = query && !exactLocal && single.data?.number === number ? single.data : undefined;
-  const items = query
-    ? [...(exactLocal ? [exactLocal] : exactRemote ? [exactRemote] : []), ...local.filter((p) => p !== exactLocal)]
-    : (recent.data ?? []);
+  const key = (p: PullRequest) => `${p.repo}#${p.number}`;
+  let items = recent.data ?? [];
+  if (query) {
+    const local = items.filter((p) => matchesRepo(p.repo) && String(p.number).startsWith(query.digits));
+    const exact = [...(remote.data ?? []), ...local.filter((p) => p.number === query.number)];
+    const seen = new Set<string>();
+    items = [...exact, ...local].filter((p) => !seen.has(key(p)) && seen.add(key(p)));
+  }
 
-  const refresh = () => {
-    recent.revalidate();
-    if (query) single.revalidate();
-  };
+  const actions = { onRefresh: () => (recent.revalidate(), remote.revalidate()), disconnect, token };
 
   return (
     <List
-      isLoading={recent.isLoading || (!!query && !exactLocal && single.isLoading)}
+      isLoading={recent.isLoading || (!!query && remote.isLoading)}
       filtering={!query}
       throttle
       onSearchTextChange={setText}
-      searchBarPlaceholder={`#NUMBER in ${repo}, or search titles…`}
+      searchBarPlaceholder="#NUMBER, repo#NUMBER, or search your PRs…"
     >
-      {items.map((pr) => (
-        <PullItem key={`${pr.repo}#${pr.number}`} pr={pr} onRefresh={refresh} onDisconnect={onDisconnect} />
-      ))}
+      <List.Section title={query ? `#${query.digits}` : "Your Recent Pull Requests"}>
+        {items.map((pr) => (
+          <PullItem key={key(pr)} pr={pr} {...actions} />
+        ))}
+      </List.Section>
       <List.EmptyView
         icon={Icon.MagnifyingGlass}
-        title={query && !single.isLoading ? `No PR #${query.digits} in ${query.repo}` : "Type #NUMBER"}
+        title={query && !remote.isLoading ? `No PR #${query.digits}` : "Type #NUMBER"}
+        description={`Searching ${targetRepos.length} repos. Star repos with ⌘⇧S.`}
+        actions={
+          <ActionPanel>
+            <ManageReposAction token={token} />
+          </ActionPanel>
+        }
       />
     </List>
+  );
+}
+
+function ManageReposAction({ token }: { token: string }) {
+  return (
+    <Action.Push
+      title="Choose Searched Repositories"
+      icon={Icon.Star}
+      shortcut={Keyboard.Shortcut.Common.Duplicate}
+      target={<RepoPicker token={token} />}
+    />
   );
 }
 
@@ -105,91 +94,43 @@ const STATE = {
 
 function PullItem({
   pr,
+  token,
   onRefresh,
-  onDisconnect,
+  disconnect,
 }: {
   pr: PullRequest;
+  token: string;
   onRefresh: () => void;
-  onDisconnect: () => Promise<void>;
+  disconnect: () => Promise<void>;
 }) {
   return (
     <List.Item
       icon={{ source: STATE[pr.state].icon, tintColor: STATE[pr.state].tint, tooltip: pr.state }}
       title={`#${pr.number}`}
       subtitle={pr.title}
-      keywords={[pr.title, pr.author, String(pr.number)]}
-      accessories={[{ text: pr.author }, { date: new Date(pr.updatedAt) }]}
+      keywords={[pr.title, pr.author, pr.repo, String(pr.number)]}
+      accessories={[{ tag: pr.repo.split("/")[1] }, { text: pr.author }, { date: new Date(pr.updatedAt) }]}
       actions={
         <ActionPanel>
           <Action.OpenInBrowser url={pr.url} />
           <Action.CopyToClipboard title="Copy URL" content={pr.url} />
           <Action.CopyToClipboard
             title="Copy Markdown Link"
-            content={`[#${pr.number} ${pr.title}](${pr.url})`}
+            content={`[${pr.repo}#${pr.number} ${pr.title}](${pr.url})`}
             shortcut={Keyboard.Shortcut.Common.Copy}
           />
+          <ManageReposAction token={token} />
           <Action
             title="Refresh"
             icon={Icon.ArrowClockwise}
             shortcut={Keyboard.Shortcut.Common.Refresh}
             onAction={onRefresh}
           />
-          <Action
-            title="Disconnect GitHub"
-            icon={Icon.Logout}
-            style={Action.Style.Destructive}
-            onAction={onDisconnect}
-          />
+          <Action title="Disconnect GitHub" icon={Icon.Logout} style={Action.Style.Destructive} onAction={disconnect} />
         </ActionPanel>
       }
     />
   );
 }
 
-function Connect({ onToken }: { onToken: (token: string) => Promise<void> }) {
-  const { clientId } = getPreferenceValues<Preferences>();
-  const [code, setCode] = useState<DeviceCode>();
-  const [error, setError] = useState<string>();
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const c = await requestDeviceCode(clientId);
-        if (cancelled) return;
-        setCode(c);
-        await Clipboard.copy(c.user_code);
-        await open(c.verification_uri);
-        const token = await pollForToken(clientId, c, () => cancelled);
-        await onToken(token);
-        await showToast({ style: Toast.Style.Success, title: "Connected to GitHub" });
-      } catch (e) {
-        if (!cancelled) setError((e as Error).message);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const markdown = error
-    ? `# Couldn't connect\n\n${error}`
-    : code
-      ? `# Connect GitHub\n\nPaste this code in the browser tab that just opened (it's already on your clipboard):\n\n# \`${code.user_code}\`\n\nWaiting for approval…`
-      : "# Connecting to GitHub…";
-
-  return (
-    <Detail
-      isLoading={!error}
-      markdown={markdown}
-      actions={
-        code && (
-          <ActionPanel>
-            <Action.OpenInBrowser title="Open GitHub" url={code.verification_uri} />
-            <Action.CopyToClipboard title="Copy Code" content={code.user_code} />
-          </ActionPanel>
-        )
-      }
-    />
-  );
-}
+export default withGitHub(Search);

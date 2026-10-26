@@ -2,7 +2,7 @@
   "$schema": "https://www.raycast.com/schemas/extension.json",
   "name": "open-gh-pr",
   "title": "GitHub PR Search",
-  "description": "Jump to any pull request by typing #NUMBER. Connects to GitHub with device login.",
+  "description": "Open any GitHub pull request by typing #NUMBER, across all your repos. One-click device login.",
   "icon": "icon.png",
   "author": "gabrieldelattre",
   "platforms": [
@@ -20,21 +20,19 @@
       "type": "textfield",
       "required": false,
       "default": "Ov23liLAdYqF9ViqdvJM"
-    },
-    {
-      "name": "repo",
-      "title": "Default Repository",
-      "description": "Repository searched when you type #NUMBER (owner/repo). Type owner/repo#NUMBER for others.",
-      "type": "textfield",
-      "required": true,
-      "placeholder": "owner/repo"
     }
   ],
   "commands": [
     {
       "name": "search-pull-requests",
       "title": "Search Pull Requests",
-      "description": "Type #NUMBER to open a pull request",
+      "description": "Type #NUMBER to open a pull request from any of your repos",
+      "mode": "view"
+    },
+    {
+      "name": "manage-repositories",
+      "title": "Choose Searched Repositories",
+      "description": "Star the repos #NUMBER searches",
       "mode": "view"
     }
   ],

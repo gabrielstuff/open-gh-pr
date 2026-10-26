@@ -1,8 +1,3 @@
-import { Cache } from "@raycast/api";
-
-const API = "https://api.github.com";
-const cache = new Cache();
-
 export type PullRequest = {
   repo: string;
   number: number;
@@ -15,66 +10,91 @@ export type PullRequest = {
 
 export class AuthError extends Error {}
 
-type RawPull = {
+type GqlPull = {
   number: number;
   title: string;
-  state: string;
-  draft?: boolean;
-  merged_at: string | null;
-  user: { login: string } | null;
-  html_url: string;
-  updated_at: string;
+  state: "OPEN" | "CLOSED" | "MERGED";
+  isDraft: boolean;
+  url: string;
+  updatedAt: string;
+  author: { login: string } | null;
+  repository: { nameWithOwner: string };
 };
 
-function toPull(repo: string, p: RawPull): PullRequest {
-  const state = p.merged_at ? "merged" : p.state === "closed" ? "closed" : p.draft ? "draft" : "open";
+const PR_FIELDS = "number title state isDraft url updatedAt author { login } repository { nameWithOwner }";
+
+function toPull(p: GqlPull): PullRequest {
+  const state = p.state === "MERGED" ? "merged" : p.state === "CLOSED" ? "closed" : p.isDraft ? "draft" : "open";
   return {
-    repo,
+    repo: p.repository.nameWithOwner,
     number: p.number,
     title: p.title,
     state,
-    author: p.user?.login ?? "ghost",
-    url: p.html_url,
-    updatedAt: p.updated_at,
+    author: p.author?.login ?? "ghost",
+    url: p.url,
+    updatedAt: p.updatedAt,
   };
 }
 
-// Conditional requests: a 304 costs nothing against the rate limit and skips the body.
-async function get<T>(path: string, token: string, map: (json: never) => T): Promise<T> {
-  const hit = cache.get(path);
-  const cached = hit ? (JSON.parse(hit) as { etag: string; data: T }) : undefined;
-
-  const res = await fetch(API + path, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      ...(cached && { "If-None-Match": cached.etag }),
-    },
+// Everything goes through GraphQL so each screen costs exactly one request.
+async function graphql<T>(token: string, query: string): Promise<T> {
+  const res = await fetch("https://api.github.com/graphql", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ query }),
   });
-
-  if (res.status === 304 && cached) return cached.data;
   if (res.status === 401) throw new AuthError("GitHub token expired or revoked");
   if (!res.ok) throw new Error(`GitHub ${res.status} ${res.statusText}`);
-
-  const data = map((await res.json()) as never);
-  const etag = res.headers.get("etag");
-  if (etag) cache.set(path, JSON.stringify({ etag, data }));
-  return data;
+  const json = (await res.json()) as { data?: T; errors?: { message: string }[] };
+  // Partial errors are expected: a repo without PR #N resolves to null.
+  if (!json.data) throw new Error(json.errors?.[0]?.message ?? "GitHub returned no data");
+  return json.data;
 }
 
-export function listRecentPulls(token: string, repo: string) {
-  return get(`/repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=100`, token, (json: RawPull[]) =>
-    json.map((p) => toPull(repo, p)),
+export async function listMyRecentPulls(token: string) {
+  const data = await graphql<{ search: { nodes: Partial<GqlPull>[] } }>(
+    token,
+    `query { search(query: "is:pr involves:@me sort:updated-desc", type: ISSUE, first: 100) {
+      nodes { ... on PullRequest { ${PR_FIELDS} } } } }`,
   );
+  return data.search.nodes.filter((n): n is GqlPull => !!n.number).map(toPull);
 }
 
-export function getPull(token: string, repo: string, number: number) {
-  return get(`/repos/${repo}/pulls/${number}`, token, (json: RawPull) => toPull(repo, json));
+export async function listMyRepos(token: string) {
+  const data = await graphql<{ viewer: { repositories: { nodes: { nameWithOwner: string; isArchived: boolean }[] } } }>(
+    token,
+    `
+      query {
+        viewer {
+          repositories(
+            first: 100
+            orderBy: { field: PUSHED_AT, direction: DESC }
+            ownerAffiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]
+          ) {
+            nodes {
+              nameWithOwner
+              isArchived
+            }
+          }
+        }
+      }
+    `,
+  );
+  return data.viewer.repositories.nodes.filter((r) => !r.isArchived).map((r) => r.nameWithOwner);
 }
 
-export function clearCache() {
-  cache.clear();
+// One request for PR #number across all given repos, using aliases.
+export async function findPullInRepos(token: string, repos: string[], number: number) {
+  if (!repos.length || !number) return [];
+  const fields = repos.map((repo, i) => {
+    const [owner, name] = repo.split("/");
+    return `r${i}: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) { pullRequest(number: ${number}) { ${PR_FIELDS} } }`;
+  });
+  const data = await graphql<Record<string, { pullRequest: GqlPull | null } | null>>(
+    token,
+    `query { ${fields.join("\n")} }`,
+  );
+  return Object.values(data).flatMap((r) => (r?.pullRequest ? [toPull(r.pullRequest)] : []));
 }
 
 // --- Device flow: https://docs.github.com/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow
@@ -99,7 +119,7 @@ async function post<T>(url: string, body: Record<string, string>): Promise<T> {
 export async function requestDeviceCode(clientId: string) {
   const code = await post<DeviceCode & { error_description?: string }>("https://github.com/login/device/code", {
     client_id: clientId,
-    scope: "repo",
+    scope: "repo read:org",
   });
   if (!code.user_code) throw new Error(code.error_description ?? "Device flow is not enabled for this OAuth App");
   return code;
