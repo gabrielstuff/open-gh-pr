@@ -5,8 +5,12 @@
   "description": "Jump to any pull request by typing #NUMBER. Connects to GitHub with device login.",
   "icon": "icon.png",
   "author": "gabrieldelattre",
-  "platforms": ["macOS"],
-  "categories": ["Developer Tools"],
+  "platforms": [
+    "macOS"
+  ],
+  "categories": [
+    "Developer Tools"
+  ],
   "license": "MIT",
   "preferences": [
     {
@@ -14,8 +18,8 @@
       "title": "GitHub OAuth App Client ID",
       "description": "Client ID of a GitHub OAuth App with Device Flow enabled",
       "type": "textfield",
-      "required": true,
-      "placeholder": "Ov23li..."
+      "required": false,
+      "default": "Ov23liLAdYqF9ViqdvJM"
     },
     {
       "name": "repo",
