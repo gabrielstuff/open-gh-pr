@@ -7,7 +7,8 @@ import { RepoPicker, useSearchedRepos } from "./repos";
 
 // "#123", "123", "repo#123" or "owner/repo#123"
 function parseNumberQuery(text: string) {
-  const m = text.trim().match(/^(?:([\w.-]+(?:\/[\w.-]+)?))?#?(\d+)$/);
+  // A repo prefix only counts when followed by "#", so "332" stays PR 332, not repo "33" + PR 2.
+  const m = text.trim().match(/^(?:([\w.-]+(?:\/[\w.-]+)?)#|#)?(\d+)$/);
   return m ? { repo: m[1]?.toLowerCase(), digits: m[2], number: Number(m[2]) } : undefined;
 }
 
